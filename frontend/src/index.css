@@ -1,0 +1,414 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* --- THEME VARIABLES --- */
+:root {
+  /* LIGHT MODE (Default Tailwind-ish) */
+  --bg-main: #FFFFFF;
+  --bg-subtle: #F8FAFC; /* Slate 50 */
+  --text-main: #0F172A; /* Slate 900 */
+  --text-muted: #64748B; /* Slate 500 */
+  --border-light: rgba(15, 23, 42, 0.1);
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --nav-bg: rgba(255, 255, 255, 0.85);
+  
+  --accent-glow: rgba(59, 130, 246, 0.2);
+  --btn-bg: #0F172A;
+  --btn-text: #FFFFFF;
+  --card-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05);
+}
+
+.dark {
+  /* DARK MODE */
+  --bg-main: #0B1120;
+  --bg-subtle: #0F172A;
+  --text-main: #F8FAFC;
+  --text-muted: #94A3B8;
+  --border-light: rgba(255, 255, 255, 0.1);
+  --glass-bg: rgba(15, 23, 42, 0.6);
+  --nav-bg: rgba(11, 17, 32, 0.7);
+  
+  --accent-glow: rgba(59, 130, 246, 0.15);
+  --btn-bg: #ffffff;
+  --btn-text: #0B1120;
+  --card-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+/* --- CURSOR & PARALLAX --- */
+.cursor-glow {
+  background: radial-gradient(
+    600px circle at var(--mouse-x, 50vw) var(--mouse-y, 50vh),
+    var(--accent-glow),
+    transparent 40%
+  );
+  transition: background 0.15s ease-out;
+}
+
+.parallax-layer-1 {
+  transform: translate(calc(var(--mouse-norm-x, 0) * -10px), calc(var(--mouse-norm-y, 0) * -10px));
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.parallax-layer-2 {
+  transform: translate(calc(var(--mouse-norm-x, 0) * 15px), calc(var(--mouse-norm-y, 0) * 15px));
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+/* --- ANIMATIONS --- */
+@keyframes fadeUp {
+  0% { opacity: 0; transform: translateY(30px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes gridMove {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(40px); }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+@keyframes float-random {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  33% { transform: translate(15px, -20px) rotate(5deg); }
+  66% { transform: translate(-10px, -10px) rotate(-5deg); }
+  100% { transform: translate(0, -30px) rotate(2deg); }
+}
+
+.animate-fade-up { animation: fadeUp 1s cubic-bezier(0.16, 1, 0.3, 1) forwards; opacity: 0; }
+.delay-100 { animation-delay: 150ms; }
+.delay-200 { animation-delay: 300ms; }
+.delay-300 { animation-delay: 450ms; }
+.delay-400 { animation-delay: 600ms; }
+
+/* --- PREMIUM UTILITIES --- */
+.glass-nav {
+  background: var(--nav-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-light);
+  transition: background 0.5s ease;
+}
+
+.glass-card-premium {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--card-shadow);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card-premium:hover {
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 0 20px var(--accent-glow);
+}
+
+/* Background Effects */
+.bg-premium-dark {
+  background-color: var(--bg-main);
+  position: relative;
+  overflow: hidden;
+  transition: background-color 0.5s ease;
+}
+
+.animated-grid {
+  position: absolute;
+  top: -100px; left: 0; right: 0; bottom: 0;
+  background-image: 
+    linear-gradient(to right, var(--border-light) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border-light) 1px, transparent 1px);
+  background-size: 50px 50px;
+  animation: gridMove 8s linear infinite; /* Slowed down */
+  mask-image: radial-gradient(ellipse at top, black 20%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse at top, black 20%, transparent 70%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.neural-dots {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(var(--border-light) 1px, transparent 1px);
+  background-size: 30px 30px;
+  mask-image: radial-gradient(circle at center, black 10%, transparent 60%);
+  -webkit-mask-image: radial-gradient(circle at center, black 10%, transparent 60%);
+  animation: pulse-slow 12s infinite alternate; /* Slowed down */
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 3D Hero Elements */
+.perspective-container {
+  perspective: 1200px;
+  transform-style: preserve-3d;
+}
+
+.hero-3d-card {
+  transform: rotateX(15deg) rotateY(-10deg) rotateZ(2deg);
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hero-3d-card:hover {
+  transform: rotateX(5deg) rotateY(-5deg) rotateZ(0deg) translateZ(20px);
+}
+
+.btn-primary {
+  @apply bg-gradient-to-r from-[#3B82F6] to-[#2563EB] text-white rounded-xl px-5 py-2.5 font-semibold transition-all duration-300;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+.btn-primary:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+}
+
+.btn-secondary {
+  @apply bg-[var(--bg-main)] text-[var(--text-main)] rounded-xl px-5 py-2.5 font-semibold transition-all duration-300 border border-[var(--border-light)];
+}
+.btn-secondary:hover {
+  @apply border-[#3B82F6]/50 bg-[var(--bg-subtle)];
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+}
+
+/* Premium Continuous Border Glow Button */
+.btn-glow {
+  @apply relative inline-flex items-center justify-center font-bold text-white transition-all duration-500 overflow-hidden;
+  border-radius: 14px;
+  z-index: 1;
+  background: transparent;
+  padding: 0.75rem 2rem; /* Keep padding here so the button has intrinsic size */
+}
+
+/* The spinning gradient border */
+.btn-glow::before {
+  content: '';
+  position: absolute;
+  top: -50%; left: -50%; width: 200%; height: 200%;
+  background: conic-gradient(from 0deg, transparent 0%, transparent 40%, rgba(59, 130, 246, 0.9) 50%, rgba(139, 92, 246, 0.9) 60%, transparent 100%);
+  animation: spin 4s linear infinite;
+  z-index: -1;
+  transition: opacity 0.3s ease;
+}
+
+/* The inner button background that masks the inside */
+.btn-glow::after {
+  content: '';
+  position: absolute;
+  inset: 1.5px; /* The border thickness */
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.9) 0%, rgba(2, 6, 23, 0.95) 100%);
+  border-radius: 12.5px;
+  z-index: -1;
+  transition: background 0.3s ease;
+}
+
+.dark .btn-glow::after {
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(2, 6, 23, 0.98) 100%);
+}
+
+.btn-glow:hover {
+  transform: scale(1.03) translateY(-1px);
+  box-shadow: 0 0 30px rgba(59, 130, 246, 0.3), 0 0 15px rgba(139, 92, 246, 0.2);
+}
+
+.btn-glow:hover::after {
+  background: linear-gradient(135deg, rgba(30, 58, 138, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Premium Continuous Border Glow Card */
+.card-glow {
+  @apply relative overflow-hidden transition-all duration-500 z-10;
+  background: transparent;
+}
+
+.card-glow::before {
+  content: '';
+  position: absolute;
+  top: -50%; left: -50%; width: 200%; height: 200%;
+  background: conic-gradient(from 0deg, transparent 0%, transparent 40%, rgba(59, 130, 246, 0.6) 50%, rgba(139, 92, 246, 0.6) 60%, transparent 100%);
+  animation: spin 6s linear infinite;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.card-glow::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  background: var(--bg-main);
+  border-radius: inherit;
+  z-index: -1;
+}
+
+.card-glow.glass-card-premium::after {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+}
+
+.card-glow:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 10px 30px rgba(59, 130, 246, 0.15), 0 0 20px rgba(139, 92, 246, 0.1);
+}
+
+.card-glow:hover::before {
+  opacity: 1;
+}
+
+.card-glow:hover .icon-glow {
+  transform: scale(1.1);
+  filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.6));
+}
+
+/* Premium Smoky Background & Particles */
+.smoke-layer {
+  position: fixed;
+  inset: -30%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.25;
+  background-image: 
+    radial-gradient(ellipse at 20% 30%, rgba(59, 130, 246, 0.35) 0%, transparent 40%),
+    radial-gradient(ellipse at 80% 60%, rgba(139, 92, 246, 0.25) 0%, transparent 50%),
+    radial-gradient(ellipse at 40% 80%, rgba(20, 184, 166, 0.2) 0%, transparent 40%);
+  filter: blur(90px);
+  animation: smokeMove 35s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+}
+
+.dark .smoke-layer {
+  opacity: 0.15;
+}
+
+@keyframes smokeMove {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-3%, 4%) scale(1.05); }
+  66% { transform: translate(4%, -2%) scale(0.95); }
+  100% { transform: translate(-2%, -4%) scale(1.02); }
+}
+
+.particle-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.3;
+  background-image: 
+    radial-gradient(circle at center, rgba(255,255,255,0.8) 1px, transparent 1px),
+    radial-gradient(circle at center, rgba(255,255,255,0.4) 1.5px, transparent 1.5px);
+  background-size: 120px 120px, 180px 180px;
+  background-position: 0 0, 60px 60px;
+  animation: particleDrift 60s linear infinite;
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,1), rgba(0,0,0,0.2));
+}
+
+.dark .particle-layer {
+  opacity: 0.15;
+}
+
+@keyframes particleDrift {
+  0% { background-position: 0 0, 60px 60px; }
+  100% { background-position: 0 -360px, 60px -300px; } /* 360 is LCM of 120 and 180 */
+}
+/* Document Particles */
+.particle {
+  position: absolute;
+  background: var(--glass-bg);
+  border: 1px solid var(--border-light);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  z-index: 0;
+  animation: float-random 15s infinite ease-in-out alternate; /* Very slow */
+}
+
+/* Gradient Text */
+.text-gradient {
+  background: linear-gradient(to right, var(--text-main), var(--text-muted));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.text-gradient-blue {
+  background: linear-gradient(to right, #60a5fa, #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Base Buttons & Inputs */
+.btn-primary {
+  @apply relative overflow-hidden bg-[var(--btn-bg)] text-[var(--btn-text)] font-semibold py-3 px-8 rounded-full transition-all duration-300 shadow-sm hover:scale-105 flex items-center justify-center gap-2;
+}
+
+.btn-secondary {
+  @apply bg-transparent border border-[var(--border-light)] hover:bg-white/5 text-[var(--text-main)] font-medium py-3 px-8 rounded-full transition-all duration-300 flex items-center justify-center gap-2;
+}
+
+.input-premium {
+  @apply w-full px-4 py-3 rounded-xl border border-[var(--border-light)] bg-transparent text-[var(--text-main)] shadow-inner focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:border-transparent transition-all duration-200 placeholder:text-[var(--text-muted)] backdrop-blur-md;
+}
+
+/* Chat Bubbles */
+.chat-bubble-ai {
+  @apply bg-[var(--bg-subtle)] border border-[var(--border-light)] text-[var(--text-main)] rounded-2xl rounded-tl-sm px-5 py-3.5 shadow-sm;
+}
+
+.chat-bubble-user {
+  @apply bg-[#3B82F6] text-white rounded-2xl rounded-tr-sm px-5 py-3.5 shadow-sm;
+}
+
+/* Floating Orbs */
+.floating-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  z-index: 0;
+  pointer-events: none;
+  animation: pulseGlow 8s infinite alternate;
+}
+
+.orb-1 { width: 500px; height: 500px; background: rgba(59, 130, 246, 0.2); top: -10%; left: 0%; }
+.orb-2 { width: 600px; height: 600px; background: rgba(139, 92, 246, 0.15); bottom: -10%; right: -10%; }
+.orb-3 { width: 400px; height: 400px; background: rgba(16, 185, 129, 0.1); top: 30%; left: 30%; }
+
+/* End of styling */
+
+@keyframes pulseGlow {
+  0%   { opacity: 0.6; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1.08); }
+}
+
+.animate-pulse-slow {
+  animation: pulseGlow 8s infinite alternate ease-in-out;
+}
+
+.animate-fade-in {
+  animation: fadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Auth form input glow on focus */
+input:focus {
+  background-color: var(--bg-main);
+}
+
+/* Smooth row deletion transition */
+tr {
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
