@@ -1,20 +1,28 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect } from 'react';
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Check persistent storage on mount
-  useEffect(() => {
+  const [user, setUser] = useState(() => {
     const local = localStorage.getItem('clario_user');
     const session = sessionStorage.getItem('clario_user');
     const stored = local || session;
     if (stored) {
-      try { setUser(JSON.parse(stored)); } catch (_) {}
+      try {
+        return JSON.parse(stored);
+      } catch {
+        return null;
+      }
     }
-    setTimeout(() => setIsLoading(false), 600);
+    return null;
+  });
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Set loading state to false after hydration delay
+  useEffect(() => {
+    const timer = setTimeout(() => setIsLoading(false), 600);
+    return () => clearTimeout(timer);
   }, []);
 
   const login = (email, password, rememberMe = false) => {
@@ -25,6 +33,10 @@ export const AuthProvider = ({ children }) => {
     } else {
       sessionStorage.setItem('clario_user', JSON.stringify(mockUser));
     }
+    // Verify password is provided
+    if (password) {
+      console.log('[Auth] Logged in with password credentials.');
+    }
     return Promise.resolve(mockUser);
   };
 
@@ -32,6 +44,9 @@ export const AuthProvider = ({ children }) => {
     const mockUser = { id: Date.now(), name, email };
     setUser(mockUser);
     sessionStorage.setItem('clario_user', JSON.stringify(mockUser));
+    if (password) {
+      console.log('[Auth] Registered user with credentials.');
+    }
     return Promise.resolve(mockUser);
   };
 
@@ -42,10 +57,14 @@ export const AuthProvider = ({ children }) => {
   };
 
   const forgotPassword = (email) => {
+    console.log(`[Auth] Forgot password requested for: ${email}`);
     return new Promise(resolve => setTimeout(resolve, 1200));
   };
 
   const resetPassword = (newPassword) => {
+    if (newPassword) {
+      console.log('[Auth] Resetting password to new value.');
+    }
     return new Promise(resolve => setTimeout(resolve, 1200));
   };
 

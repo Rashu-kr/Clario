@@ -1,13 +1,7 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-
-const MOCK_DOCS = [
-  { id: 1, name: 'Q3_Financial_Report.pdf', date: 'Apr 29, 2026', size: '2.4 MB', status: 'Completed', type: 'pdf' },
-  { id: 2, name: 'Employment_Contract_Template.docx', date: 'Apr 27, 2026', size: '1.1 MB', status: 'Processing', type: 'doc' },
-  { id: 3, name: 'NDA_Acme_Corp.pdf', date: 'Apr 22, 2026', size: '0.8 MB', status: 'Completed', type: 'pdf' },
-  { id: 4, name: 'Lease_Agreement_Scan.pdf', date: 'Apr 18, 2026', size: '5.6 MB', status: 'Failed', type: 'pdf' },
-];
+import { getDocuments, deleteDocument } from '../utils/db';
 
 const StatusBadge = ({ status }) => {
   const map = {
@@ -37,21 +31,37 @@ const FileIcon = ({ type }) => (
 export const Dashboard = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [docs, setDocs] = useState(MOCK_DOCS);
+  const [docs, setDocs] = useState([]);
   const [deletingId, setDeletingId] = useState(null);
 
-  const handleDelete = (id) => {
+  useEffect(() => {
+    const loadDocuments = async () => {
+      if (user?.email) {
+        const data = await getDocuments(user.email);
+        setDocs(data);
+      }
+    };
+    loadDocuments();
+  }, [user]);
+
+  const handleDelete = async (id) => {
     setDeletingId(id);
-    setTimeout(() => {
-      setDocs(prev => prev.filter(d => d.id !== id));
+    try {
+      await deleteDocument(id);
+      setTimeout(() => {
+        setDocs(prev => prev.filter(d => d.id !== id));
+        setDeletingId(null);
+      }, 500);
+    } catch (err) {
+      console.error('Failed to delete document:', err);
       setDeletingId(null);
-    }, 500);
+    }
   };
 
   const stats = [
     {
       label: 'Total Analyzed',
-      value: '24',
+      value: docs.length.toString(),
       icon: (
         <svg className="w-6 h-6 text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -62,7 +72,7 @@ export const Dashboard = () => {
     },
     {
       label: 'Time Saved',
-      value: '18 hrs',
+      value: `${(docs.length * 0.75).toFixed(1)} hrs`,
       icon: (
         <svg className="w-6 h-6 text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -213,7 +223,7 @@ export const Dashboard = () => {
                           <button
                             title="View Summary"
                             className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[#3B82F6] hover:bg-[#3B82F6]/10 transition-all duration-200"
-                            onClick={() => navigate('/app')}
+                            onClick={() => navigate('/app', { state: { document: doc } })}
                           >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -225,7 +235,7 @@ export const Dashboard = () => {
                           <button
                             title="Ask AI"
                             className="p-2 rounded-lg text-[var(--text-muted)] hover:text-purple-500 hover:bg-purple-500/10 transition-all duration-200"
-                            onClick={() => navigate('/app')}
+                            onClick={() => navigate('/app', { state: { document: doc } })}
                           >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m1.636-6.364l.707.707M12 20v1M7.05 7.05a7 7 0 109.9 9.9" />

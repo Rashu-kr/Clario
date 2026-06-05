@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -86,7 +86,7 @@ export const Register = () => {
       await new Promise(r => setTimeout(r, 1300));
       await register(name, email, password);
       navigate('/dashboard', { replace: true });
-    } catch (err) {
+    } catch {
       setErrors({ form: 'Something went wrong. Please try again.' });
       setIsSubmitting(false);
     }

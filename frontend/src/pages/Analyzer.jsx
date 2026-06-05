@@ -1,8 +1,26 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useRef, useEffect } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
-import { uploadDocument } from '../utils/api';
+import { useAuth } from '../context/AuthContext';
+import { uploadDocument, chatWithDocument, deleteSession } from '../utils/api';
+import { extractText, chunkText, analyzeDocumentText, calculateRiskScore } from '../utils/localAi';
+import { saveDocument, updateChatHistory } from '../utils/db';
 
+// Subcomponents extracted for semantic division and maintainability
+import { LocalAIInitializer } from '../components/LocalAIInitializer';
+import { PDFUploadDropzone } from '../components/PDFUploadDropzone';
+import { FilePreview } from '../components/FilePreview';
+import { AIProcessingSpinner } from '../components/AIProcessingSpinner';
+import { ErrorAlert } from '../components/ErrorAlert';
+import { ExecutiveSummary } from '../components/ExecutiveSummary';
+import { MachineLearningAnalysis } from '../components/MachineLearningAnalysis';
+import { RiskAssessment } from '../components/RiskAssessment';
+import { ChatInterface } from '../components/ChatInterface';
+
+/**
+ * Logo Component
+ * Renders the animated Clario brand logo with thematic gradient fill.
+ */
 const Logo = () => {
   return (
     <Link to="/" className="flex items-center gap-2">
@@ -22,51 +40,143 @@ const Logo = () => {
   );
 };
 
-// Processing steps definition
-const PROCESSING_STEPS = [
-  "Securely uploading...",
-  "Reading document...",
-  "Extracting key clauses...",
-  "Evaluating risks...",
-  "Preparing summary..."
-];
-
+// Suggested questions presented in the chat UI
 const SUGGESTED_QUESTIONS = [
   "Summarize the main risks",
   "What is the governing law?",
   "Is there a non-compete?"
 ];
 
+/**
+ * Analyzer Component
+ * 
+ * Main interface for document ingestion, local processing, and semantic chat.
+ * Implements a hybrid browser-centric architecture:
+ * 1. File Ingestion: Drag & drop handles local file picking.
+ * 2. Web Worker Handshake: Loads an open-source model in a background thread to generate embeddings without main-thread UI lag.
+ * 3. Text Extraction & sliding window chunking: Performed entirely locally.
+ * 4. Local Embedding & Inference: Calls the Web Worker to generate dense vector representations.
+ * 5. Vector Search Logic: Computes cosine similarity of query vs chunk vectors inside the browser.
+ * 6. Metadata Registration: Contacts the FastAPI backend strictly to log session metrics.
+ */
 export const Analyzer = () => {
   const { theme, toggleTheme } = useTheme();
+  const location = useLocation();
+  const { user } = useAuth();
+  
+  // UI and Upload State Management
   const [state, setState] = useState('upload'); // 'upload', 'preview', 'processing', 'results', 'error'
   const [file, setFile] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [privacyMode, setPrivacyMode] = useState(true);
   const [processingStepIndex, setProcessingStepIndex] = useState(0);
   const [explainMode, setExplainMode] = useState('professional');
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [apiResult, setApiResult] = useState(null); // { summary, file_name, file_size_mb }
+  const [apiResult, setApiResult] = useState(null);
   const [apiError, setApiError] = useState('');
+  const [sessionId, setSessionId] = useState(null);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const chatEndRef = useRef(null);
+  const [dbDocId, setDbDocId] = useState(null);
+
+  // --- LOCAL AI & WEB WORKER STATE CONTROLS ---
+  const [isWorkerReady, setIsWorkerReady] = useState(false);
+  const [modelProgress, setModelProgress] = useState(0);
+  const [modelStatusText, setModelStatusText] = useState('Checking local AI cache...');
+
+  // Persistent references to Web Worker and document memory index
+  const workerRef = useRef(null);
+  const chunksRef = useRef([]);
+  const embeddingsRef = useRef([]);
+
+  // Chat message thread
   const [messages, setMessages] = useState([
     { role: 'ai', content: 'I have successfully analyzed your document. What would you like to know?' }
   ]);
 
-  // Handle Drag & Drop
-  const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
-  const handleDragLeave = () => { setIsDragging(false); };
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileSelected(e.dataTransfer.files[0]);
+  // Load past document if passed from Dashboard route state
+  useEffect(() => {
+    if (location.state?.document) {
+      const historicalDoc = location.state.document;
+      setTimeout(() => {
+        setDbDocId(historicalDoc.id);
+        setState('results');
+        setFile({ name: historicalDoc.name, size: parseFloat(historicalDoc.size) * 1024 * 1024 });
+        setSessionId(historicalDoc.session_id);
+        
+        setApiResult({
+          file_name: historicalDoc.name,
+          session_id: historicalDoc.session_id,
+          summary: historicalDoc.summary,
+          ml_analysis: historicalDoc.ml_analysis,
+          risk_counts: historicalDoc.risk_counts,
+          overall_risk: historicalDoc.overall_risk,
+          file_size_mb: historicalDoc.size
+        });
+        
+        chunksRef.current = historicalDoc.chunks || [];
+        embeddingsRef.current = historicalDoc.embeddings || [];
+        
+        if (historicalDoc.messages && historicalDoc.messages.length > 0) {
+          setMessages(historicalDoc.messages);
+        }
+      }, 0);
     }
-  };
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      handleFileSelected(e.target.files[0]);
-    }
+  }, [location.state]);
+
+  // Autoscroll chat window to recent messages
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // --- WEB WORKER HANDSHAKE & INITIALIZATION ---
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/ai.worker.js', import.meta.url), { type: 'module' });
+    workerRef.current = worker;
+
+    worker.postMessage({ type: 'init' });
+
+    worker.onmessage = (event) => {
+      const { type, data } = event.data;
+      if (type === 'init_progress') {
+        setModelProgress(Math.round(data.progress * 100));
+        setModelStatusText(`Initializing local AI model cache: ${Math.round(data.progress * 100)}% (${(data.loaded / 1024 / 1024).toFixed(1)}MB of ${(data.total / 1024 / 1024).toFixed(1)}MB)`);
+      } else if (type === 'init_complete') {
+        setIsWorkerReady(true);
+      } else if (type === 'error') {
+        setApiError(`Local AI worker failed: ${data}`);
+        setState('error');
+      }
+    };
+
+    return () => {
+      worker.terminate();
+    };
+  }, []);
+
+  // --- PROMISE-BASED WEB WORKER CLIENT ---
+  const runWorkerTask = (type, data) => {
+    return new Promise((resolve, reject) => {
+      const worker = workerRef.current;
+      if (!worker) {
+        reject(new Error("Worker not initialized"));
+        return;
+      }
+
+      const handleMessage = (event) => {
+        const { type: responseType, data: responseData } = event.data;
+        if (responseType === `${type}_complete`) {
+          worker.removeEventListener('message', handleMessage);
+          resolve(responseData);
+        } else if (responseType === 'error') {
+          worker.removeEventListener('message', handleMessage);
+          reject(new Error(responseData));
+        }
+      };
+
+      worker.addEventListener('message', handleMessage);
+      worker.postMessage({ type, data });
+    });
   };
 
   const handleFileSelected = (selectedFile) => {
@@ -74,68 +184,212 @@ export const Analyzer = () => {
     setState('preview');
   };
 
+  // Reset all states to allow analyzing a new file
   const resetAnalyzer = () => {
+    if (sessionId) deleteSession(sessionId);
+
     setState('upload');
     setFile(null);
     setApiResult(null);
     setApiError('');
     setUploadProgress(0);
     setProcessingStepIndex(0);
+    setSessionId(null);
+    setIsChatLoading(false);
+    chunksRef.current = [];
+    embeddingsRef.current = [];
     setMessages([{ role: 'ai', content: 'I have successfully analyzed your document. What would you like to know?' }]);
   };
 
+  // --- LOCAL PROCESSING & VECTORIZATION FLOW ---
   const startProcessing = async () => {
     setState('processing');
     setProcessingStepIndex(0);
     setUploadProgress(0);
     setApiError('');
 
-    // Animate steps while upload + AI runs in parallel
-    let step = 0;
-    const interval = setInterval(() => {
-      step++;
-      if (step < PROCESSING_STEPS.length - 1) {
-        setProcessingStepIndex(step);
-      }
-    }, 900);
-
     try {
-      const result = await uploadDocument(file, (pct) => setUploadProgress(pct));
-      clearInterval(interval);
-      setProcessingStepIndex(PROCESSING_STEPS.length - 1);
-      setApiResult(result);
-      setMessages([{ role: 'ai', content: 'I have successfully analyzed your document. What would you like to know?' }]);
+      setProcessingStepIndex(1);
+      const text = await extractText(file);
+
+      setProcessingStepIndex(2);
+      const chunks = chunkText(text);
+      if (chunks.length === 0) {
+        throw new Error("Could not extract any valid text from document.");
+      }
+
+      setProcessingStepIndex(3);
+      const { embeddings } = await runWorkerTask('embed', { texts: chunks });
+      chunksRef.current = chunks;
+      embeddingsRef.current = embeddings;
+
+      const localResult = analyzeDocumentText(text);
+
+      const ml_analysis = chunks.map((chunk, index) => {
+        const chunkRisk = calculateRiskScore(chunk);
+        const billingWords = ["bill", "billing", "invoice", "amount", "payment", "paid", "due", "charge"];
+        const medicalWords = ["patient", "diagnosis", "doctor", "treatment", "medicine", "hospital", "symptom"];
+        const claimWords = ["claim", "policy", "insurance", "rejected", "approved", "verification", "proof"];
+        const riskWords = ["missing", "mismatch", "pending", "delay", "reject", "error", "failed"];
+
+        let clauseType = "General Document Information";
+        const chunkLower = chunk.toLowerCase();
+        if (billingWords.some(w => chunkLower.includes(w))) clauseType = "Billing / Payment Related";
+        else if (medicalWords.some(w => chunkLower.includes(w))) clauseType = "Medical / Patient Related";
+        else if (claimWords.some(w => chunkLower.includes(w))) clauseType = "Claim / Insurance Related";
+        else if (riskWords.some(w => chunkLower.includes(w))) clauseType = "Risk / Clause Analysis";
+
+        return {
+          chunk_index: index + 1,
+          chunk: chunk,
+          clause_type: clauseType,
+          risk_level: chunkRisk.risk_score > 10 ? chunkRisk.risk_level : "Low"
+        };
+      });
+
+      setProcessingStepIndex(4);
+      const backendResult = await uploadDocument(file, (pct) => setUploadProgress(pct));
+      setSessionId(backendResult.session_id);
+
+      const combinedResult = {
+        ...backendResult,
+        summary: localResult.summary,
+        keywords: localResult.keywords,
+        clusters: localResult.clusters,
+        important_sections: localResult.important_sections,
+        ml_analysis: ml_analysis,
+        total_chunks: chunks.length
+      };
+
+      setApiResult(combinedResult);
+
+      const ragNote = `Document indexed into ${chunks.length} local semantic chunks. Browser-side AI generated embeddings and classified risk levels via WASM. Ask me anything about it!`;
+      const initialMessages = [{ role: 'ai', content: ragNote }];
+      setMessages(initialMessages);
+
+      try {
+        const saved = await saveDocument({
+          user_email: user?.email || 'anonymous',
+          name: file.name,
+          size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+          status: 'Completed',
+          type: file.name.split('.').pop().toLowerCase() || 'pdf',
+          overall_risk: combinedResult.ml_analysis.some(x => x.risk_level === 'High') ? 'High' : 
+                        combinedResult.ml_analysis.some(x => x.risk_level === 'Medium') ? 'Medium' : 'Low',
+          session_id: backendResult.session_id,
+          summary: localResult.summary,
+          ml_analysis: ml_analysis,
+          risk_counts: {
+            high: ml_analysis.filter(x => x.risk_level === 'High').length,
+            medium: ml_analysis.filter(x => x.risk_level === 'Medium').length,
+            low: ml_analysis.filter(x => x.risk_level === 'Low').length
+          },
+          chunks: chunks,
+          embeddings: embeddings,
+          messages: initialMessages
+        });
+        setDbDocId(saved.id);
+      } catch (dbErr) {
+        console.error("Failed to save new document to IndexedDB:", dbErr);
+      }
+
       setTimeout(() => setState('results'), 600);
     } catch (err) {
-      clearInterval(interval);
-      setApiError(err.message || 'An unexpected error occurred.');
+      console.error("Local processing error:", err);
+      setApiError(err.message || 'An unexpected error occurred during client-side processing.');
       setState('error');
     }
   };
 
-  const handleSendMessage = (e, explicitMessage = null) => {
+  // --- CLIENT-SIDE VECTOR SEARCH LOGIC ---
+  const handleSendMessage = async (e, explicitMessage = null) => {
     if (e) e.preventDefault();
+
     const msgText = explicitMessage || chatInput;
-    if (!msgText.trim()) return;
-    
-    const newMessages = [...messages, { role: 'user', content: msgText }];
-    setMessages(newMessages);
+
+    if (!msgText.trim() || isChatLoading) return;
+
+    if (!sessionId) {
+      setMessages(prev => [
+        ...prev,
+        { role: 'ai', content: 'Please upload and analyze a document first.' }
+      ]);
+      return;
+    }
+
+    const userMsg = { role: 'user', content: msgText };
+    const loadingMsg = { role: 'ai', content: '...', loading: true };
+
+    setMessages(prev => {
+      const updated = [...prev, userMsg, loadingMsg];
+      if (dbDocId) {
+        updateChatHistory(dbDocId, updated.filter(m => !m.loading));
+      }
+      return updated;
+    });
+
     if (!explicitMessage) setChatInput('');
-    
-    setTimeout(() => {
-      setMessages([...newMessages, { role: 'ai', content: 'Based on my analysis, Section 4.2 covers that specific scenario. It explicitly states that the governing law is Delaware.' }]);
-    }, 1200);
+
+    setIsChatLoading(true);
+
+    try {
+      const { embeddings: queryEmbeddings } = await runWorkerTask('embed', { texts: [msgText] });
+      const queryEmbedding = queryEmbeddings[0];
+
+      const { similarities } = await runWorkerTask('cosine_similarity', {
+        queryEmbedding,
+        chunkEmbeddings: embeddingsRef.current
+      });
+
+      const scoredChunks = chunksRef.current.map((chunk, idx) => ({
+        chunk,
+        score: similarities[idx]
+      }));
+
+      scoredChunks.sort((a, b) => b.score - a.score);
+      const topK = scoredChunks.slice(0, 5).filter(sc => sc.score > 0.05).map(sc => sc.chunk);
+      const contextChunks = topK.length > 0 ? topK : chunksRef.current.slice(0, 5);
+
+      const data = await chatWithDocument(sessionId, msgText, contextChunks);
+      const aiMsg = {
+        role: 'ai',
+        content: data.answer,
+        chunks: contextChunks
+      };
+
+      setMessages(prev => {
+        const updated = [...prev.filter(m => !m.loading), aiMsg];
+        if (dbDocId) {
+          updateChatHistory(dbDocId, updated);
+        }
+        return updated;
+      });
+    } catch (err) {
+      const errMsg = {
+        role: 'ai',
+        content: `Error: ${err.message}`
+      };
+
+      setMessages(prev => {
+        const updated = [...prev.filter(m => !m.loading), errMsg];
+        if (dbDocId) {
+          updateChatHistory(dbDocId, updated);
+        }
+        return updated;
+      });
+    } finally {
+      setIsChatLoading(false);
+    }
   };
 
   const getSummaryContent = () => {
-    // Use real AI summary if available
     if (apiResult?.summary) {
       return apiResult.summary
         .split('\n')
         .map(line => line.replace(/^[•\-*]\s*/, '').trim())
         .filter(line => line.length > 0);
     }
-    // Fallback mock
+
     return [
       "This is a standard Non-Disclosure Agreement (NDA) between two parties.",
       "The duration of confidentiality is 5 years from the date of disclosure.",
@@ -143,10 +397,52 @@ export const Analyzer = () => {
     ];
   };
 
+  const getMlAnalysis = () => {
+    return apiResult?.ml_analysis || [];
+  };
+
+  const getRiskCounts = () => {
+    const analysis = getMlAnalysis();
+
+    return analysis.reduce(
+      (acc, item) => {
+        const risk = (item.risk_level || '').toLowerCase();
+
+        if (risk === 'high') acc.high += 1;
+        else if (risk === 'medium') acc.medium += 1;
+        else if (risk === 'low') acc.low += 1;
+
+        return acc;
+      },
+      { high: 0, medium: 0, low: 0 }
+    );
+  };
+
+  const getOverallRisk = () => {
+    const counts = getRiskCounts();
+
+    if (counts.high > 0) return 'High';
+    if (counts.medium > 0) return 'Medium';
+    return 'Low';
+  };
+
+  const getRiskBadgeClass = (risk) => {
+    const value = (risk || '').toLowerCase();
+
+    if (value === 'high') {
+      return 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20';
+    }
+
+    if (value === 'medium') {
+      return 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20';
+    }
+
+    return 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20';
+  };
+
   return (
     <div className="min-h-screen bg-[var(--bg-subtle)] flex flex-col font-sans transition-colors duration-500">
-      
-      {/* Background Orbs specific to Analyzer */}
+
       {(state === 'upload' || state === 'preview') && (
         <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden parallax-layer-2">
           <div className="absolute top-[-20%] left-[-10%] w-[800px] h-[800px] bg-[#3B82F6]/10 rounded-full blur-[120px] animate-pulse-slow"></div>
@@ -154,23 +450,35 @@ export const Analyzer = () => {
         </div>
       )}
 
-      {/* Header */}
       <header className="h-16 bg-[var(--nav-bg)] backdrop-blur-md border-b border-[var(--border-light)] flex items-center justify-between px-6 shrink-0 z-50 sticky top-0">
         <Logo />
+
         <div className="flex items-center gap-6">
+          <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20 rounded-full text-xs font-semibold">
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+            Local Session Secure
+          </span>
+
           <button onClick={toggleTheme} className="text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors">
             {theme === 'dark' ? (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
             ) : (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+              </svg>
             )}
           </button>
-          
+
           {(state === 'results' || state === 'preview' || state === 'error') && (
             <button onClick={resetAnalyzer} className="text-sm font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors">
               Start New Analysis
             </button>
           )}
+
           <div className="w-8 h-8 rounded-full bg-[#3B82F6]/20 border border-[#3B82F6]/50 flex items-center justify-center text-[#3B82F6] font-bold text-sm">
             RK
           </div>
@@ -178,190 +486,51 @@ export const Analyzer = () => {
       </header>
 
       <main className="flex-1 flex flex-col relative z-10">
-        
-        {/* STATE: UPLOAD */}
-        {state === 'upload' && (
-          <div className="flex-1 flex items-center justify-center p-6 animate-fade-up">
-            <div className="w-full max-w-4xl">
-              <div className="text-center mb-10">
-                <h1 className="text-4xl md:text-5xl font-extrabold text-[var(--text-main)] mb-4 tracking-tight">Select a document to analyze</h1>
-                <p className="text-lg text-[var(--text-muted)]">Clario's AI will extract insights, summarize risks, and let you chat with the contents.</p>
-              </div>
-              
-              <div 
-                className={`glass-card-premium card-glow rounded-3xl p-2 transition-all duration-500 transform ${
-                  isDragging ? 'scale-[1.02] shadow-[0_0_50px_rgba(59,130,246,0.2)]' : ''
-                }`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                <div className={`border-2 border-dashed rounded-2xl p-16 md:p-24 text-center transition-all duration-300 relative overflow-hidden ${
-                  isDragging ? 'border-[#3B82F6]/50 bg-[#3B82F6]/5' : 'border-[var(--border-light)] hover:border-[#3B82F6]/30 hover:bg-[var(--bg-main)]/50'
-                }`}>
-                  
-                  {isDragging && <div className="absolute inset-0 bg-gradient-to-br from-[#3B82F6]/10 to-transparent animate-pulse-slow"></div>}
 
-                  <div className="relative z-10 flex flex-col items-center">
-                    <div className="w-24 h-24 mb-8 rounded-full bg-[var(--bg-subtle)] border border-[var(--border-light)] flex items-center justify-center shadow-lg relative">
-                      <div className="absolute inset-0 rounded-full bg-[#3B82F6]/20 animate-ping opacity-20"></div>
-                      <svg className="w-10 h-10 text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
-                    </div>
-                    
-                    <h3 className="text-2xl font-semibold mb-3 text-[var(--text-main)]">
-                      {isDragging ? 'Drop it here!' : 'Drag & drop your document'}
-                    </h3>
-                    <p className="text-[var(--text-muted)] mb-10 max-w-md mx-auto leading-relaxed">
-                      Supports PDF, DOCX, and TXT files up to 25MB. All files are encrypted during transfer and instantly deleted after processing.
-                    </p>
-                    
-                    <input type="file" id="fileUpload" className="hidden" accept=".pdf,.docx,.txt" onChange={handleFileChange} />
-                    <label htmlFor="fileUpload" className="btn-primary cursor-pointer text-lg px-10">
-                      Browse Files
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* Trust Indicators */}
-              <div className="mt-10 flex flex-wrap items-center justify-center gap-6 text-sm font-medium text-[var(--text-muted)]">
-                <div className="flex items-center gap-2">
-                  <svg className="w-5 h-5 text-[#10B981]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                  End-to-End Encrypted
-                </div>
-                <div className="flex items-center gap-2">
-                  <svg className="w-5 h-5 text-[#10B981]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                  Private AI Processing
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* STATE: PREVIEW */}
-        {state === 'preview' && (
-          <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
-            <div className="w-full max-w-xl">
-              <div className="glass-card-premium rounded-3xl p-8 text-center relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4">
-                  <button onClick={resetAnalyzer} className="text-[var(--text-muted)] hover:text-red-500 transition-colors p-2 rounded-full hover:bg-red-500/10">
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                  </button>
-                </div>
-
-                <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-[#3B82F6]/10 border border-[#3B82F6]/20 flex items-center justify-center shadow-lg">
-                  <svg className="w-10 h-10 text-[#3B82F6]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                </div>
-                
-                <h3 className="text-2xl font-bold text-[var(--text-main)] mb-1 truncate px-8">{file?.name}</h3>
-                <p className="text-sm text-[var(--text-muted)] mb-10">{(file?.size / (1024 * 1024)).toFixed(2)} MB • Ready for analysis</p>
-
-                {/* Privacy Toggle */}
-                <div className="flex items-center justify-between p-4 mb-10 rounded-xl bg-[var(--bg-main)] border border-[var(--border-light)] shadow-inner text-left">
-                  <div>
-                    <div className="text-sm font-semibold text-[var(--text-main)] mb-0.5">Privacy Mode</div>
-                    <div className="text-xs text-[var(--text-muted)]">Auto-delete from servers immediately after session.</div>
-                  </div>
-                  <button 
-                    onClick={() => setPrivacyMode(!privacyMode)}
-                    className={`w-12 h-6 rounded-full transition-colors relative ${privacyMode ? 'bg-[#10B981]' : 'bg-[var(--border-light)]'}`}
-                  >
-                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${privacyMode ? 'left-7' : 'left-1'}`}></div>
-                  </button>
-                </div>
-
-                <button onClick={startProcessing} className="btn-glow w-full text-lg shadow-[0_0_30px_rgba(59,130,246,0.3)]">
-                  Start Analysis
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* STATE: PROCESSING */}
-        {state === 'processing' && (
-          <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
-            <div className="text-center w-full max-w-md relative">
-              <div className="absolute inset-0 bg-[#3B82F6]/20 blur-[100px] rounded-full z-0 pointer-events-none"></div>
-              
-              <div className="relative z-10 glass-card-premium p-12 rounded-3xl border border-[#3B82F6]/20 shadow-[0_0_50px_rgba(59,130,246,0.15)] overflow-hidden">
-
-                {/* Upload Progress Bar */}
-                <div className="absolute bottom-0 left-0 h-1.5 bg-[#3B82F6] transition-all duration-300 ease-out" style={{ width: `${uploadProgress || ((processingStepIndex + 1) / PROCESSING_STEPS.length) * 100}%` }}></div>
-
-                {/* Premium Spinner */}
-                <div className="relative w-24 h-24 mx-auto mb-8">
-                  <div className="absolute inset-0 rounded-full border-2 border-[var(--border-light)]"></div>
-                  <div className="absolute inset-0 rounded-full border-2 border-[#3B82F6] border-t-transparent border-l-transparent animate-spin" style={{ animationDuration: '1.5s' }}></div>
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <svg className="w-8 h-8 text-[#3B82F6] animate-pulse-slow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                  </div>
-                </div>
-                
-                <h2 className="text-2xl font-bold text-[var(--text-main)] mb-6 tracking-tight">Analyzing Document</h2>
-                
-                {/* Step List */}
-                <div className="space-y-3 text-left max-w-[250px] mx-auto">
-                  {PROCESSING_STEPS.map((stepStr, i) => {
-                    const isCompleted = i < processingStepIndex;
-                    const isActive = i === processingStepIndex;
-                    return (
-                      <div key={i} className={`flex items-center gap-3 text-sm transition-all duration-300 ${isActive ? 'text-[var(--text-main)] scale-105 font-medium' : isCompleted ? 'text-[#10B981]' : 'text-[var(--text-muted)] opacity-50'}`}>
-                        {isCompleted ? (
-                          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
-                        ) : isActive ? (
-                          <div className="w-4 h-4 shrink-0 rounded-full border-2 border-[#3B82F6] border-t-transparent animate-spin"></div>
-                        ) : (
-                          <div className="w-4 h-4 shrink-0 rounded-full border-2 border-[var(--border-light)]"></div>
-                        )}
-                        {stepStr}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* STATE: ERROR */}
-        {state === 'error' && (
-          <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
-            <div className="w-full max-w-md">
-              <div className="glass-card-premium rounded-3xl p-10 text-center">
-                <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
-                  <svg className="w-10 h-10 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                </div>
-                <h2 className="text-2xl font-bold text-[var(--text-main)] mb-3">Upload Failed</h2>
-                <p className="text-[var(--text-muted)] text-sm leading-relaxed mb-8">{apiError}</p>
-                <button onClick={resetAnalyzer} className="btn-glow w-full py-3.5 text-base font-semibold flex items-center justify-center gap-2">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Try Again
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* STATE: RESULTS & CHAT */}
-        {state === 'results' && (
+        {!isWorkerReady ? (
+          <LocalAIInitializer
+            modelStatusText={modelStatusText}
+            modelProgress={modelProgress}
+          />
+        ) : state === 'upload' ? (
+          <PDFUploadDropzone onFileSelected={handleFileSelected} />
+        ) : state === 'preview' ? (
+          <FilePreview
+            file={file}
+            privacyMode={privacyMode}
+            setPrivacyMode={setPrivacyMode}
+            startProcessing={startProcessing}
+            resetAnalyzer={resetAnalyzer}
+          />
+        ) : state === 'processing' ? (
+          <AIProcessingSpinner
+            processingStepIndex={processingStepIndex}
+            uploadProgress={uploadProgress}
+          />
+        ) : state === 'error' ? (
+          <ErrorAlert
+            apiError={apiError}
+            resetAnalyzer={resetAnalyzer}
+          />
+        ) : state === 'results' ? (
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden animate-fade-in bg-[var(--bg-main)]">
-            
-            {/* Left Column: Summary Card */}
+
             <div className="w-full lg:w-1/3 bg-[var(--bg-main)] border-r border-[var(--border-light)] overflow-y-auto z-10 shadow-[10px_0_30px_rgba(0,0,0,0.02)] relative">
               <div className="p-8 pb-6 border-b border-[var(--border-light)] sticky top-0 bg-[var(--bg-main)]/90 backdrop-blur-md z-20">
                 <div className="flex items-center gap-4">
                   <div className="p-3 bg-[#3B82F6]/10 rounded-xl border border-[#3B82F6]/20">
-                    <svg className="w-6 h-6 text-[#3B82F6]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    <svg className="w-6 h-6 text-[#3B82F6]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
                   </div>
+
                   <div className="min-w-0">
                     <h2 className="font-bold text-[var(--text-main)] truncate text-lg">{apiResult?.file_name || file?.name || 'Document.pdf'}</h2>
+
                     <p className="text-sm text-[#10B981] font-medium flex items-center gap-1.5 mt-1">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                      </svg>
                       Analysis Complete{apiResult?.file_size_mb ? ` • ${apiResult.file_size_mb} MB` : ''}
                     </p>
                   </div>
@@ -369,122 +538,36 @@ export const Analyzer = () => {
               </div>
 
               <div className="p-8 space-y-10">
-                
-                {/* Explain Mode Toggle */}
-                <div className="bg-[var(--bg-subtle)] p-1 rounded-lg flex items-center text-sm font-medium border border-[var(--border-light)] shadow-inner">
-                  {['professional', 'simple', 'eli5'].map((mode) => (
-                    <button 
-                      key={mode}
-                      onClick={() => setExplainMode(mode)}
-                      className={`flex-1 py-1.5 rounded-md capitalize transition-all duration-200 ${explainMode === mode ? 'bg-white dark:bg-[#1E293B] text-[var(--text-main)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'}`}
-                    >
-                      {mode}
-                    </button>
-                  ))}
-                </div>
+                <ExecutiveSummary
+                  summaryContent={getSummaryContent()}
+                  explainMode={explainMode}
+                  setExplainMode={setExplainMode}
+                />
 
-                {/* Executive Summary */}
-                <section className="animate-fade-up">
-                  <h3 className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest mb-4 flex items-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                    Executive Summary
-                  </h3>
-                  <ul className="space-y-4">
-                    {getSummaryContent().map((text, i) => (
-                      <li key={i} className="flex items-start gap-3 text-sm text-[var(--text-main)] leading-relaxed">
-                        <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#3B82F6] shrink-0 shadow-[0_0_8px_#3B82F6]"></div>
-                        <div>{text}</div>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
+                <MachineLearningAnalysis
+                  mlAnalysis={getMlAnalysis()}
+                  getRiskBadgeClass={getRiskBadgeClass}
+                />
 
-                {/* Risk Meter */}
-                <section className="animate-fade-up delay-100">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest flex items-center gap-2">
-                      <svg className="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                      Risk Assessment
-                    </h3>
-                    {/* Meter Gauge Visual */}
-                    <div className="flex items-center gap-1.5">
-                      <div className="h-1.5 w-6 rounded-full bg-[#10B981]"></div>
-                      <div className="h-1.5 w-6 rounded-full bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.6)]"></div>
-                      <div className="h-1.5 w-6 rounded-full bg-[var(--border-light)]"></div>
-                      <span className="text-xs font-bold text-orange-500 ml-1">Medium</span>
-                    </div>
-                  </div>
-
-                  <div className="bg-orange-500/10 border border-orange-500/20 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
-                    <h4 className="font-semibold text-orange-600 dark:text-orange-400 text-sm mb-2">Broad Definition of Confidential Info</h4>
-                    <p className="text-sm text-orange-700 dark:text-orange-300/80 leading-relaxed">Clause 2.1 defines confidential info very broadly, which may include publicly available data if not challenged.</p>
-                  </div>
-                </section>
+                <RiskAssessment
+                  riskCounts={getRiskCounts()}
+                  overallRisk={getOverallRisk()}
+                  getRiskBadgeClass={getRiskBadgeClass}
+                />
               </div>
             </div>
 
-            {/* Right Column: AI Chat */}
-            <div className="w-full lg:w-2/3 bg-[var(--bg-subtle)] flex flex-col h-[calc(100vh-64px)] relative">
-              {/* Background gradient for chat */}
-              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[var(--bg-main)] opacity-50 pointer-events-none"></div>
-
-              {/* Chat Messages */}
-              <div className="flex-1 overflow-y-auto p-6 md:p-10 space-y-8 relative z-10 scroll-smooth">
-                {messages.map((msg, idx) => (
-                  <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-up`}>
-                    <div className={`max-w-[85%] md:max-w-[75%] text-[15px] leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-[#3B82F6] text-white rounded-2xl rounded-tr-sm px-6 py-4' : 'glass-card-premium text-[var(--text-main)] rounded-2xl rounded-tl-sm px-6 py-4 border border-[var(--border-light)] relative'}`}>
-                      {msg.role === 'ai' && (
-                        <div className="absolute -left-3 -top-3 w-7 h-7 rounded-full bg-[#10B981] border-2 border-[var(--bg-subtle)] flex items-center justify-center shadow-md">
-                          <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        </div>
-                      )}
-                      {msg.content}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Chat Input */}
-              <div className="px-6 md:px-8 pb-8 pt-4 border-t border-[var(--border-light)] bg-[var(--bg-main)]/80 backdrop-blur-xl relative z-20">
-                
-                {/* Suggested Questions */}
-                <div className="flex flex-wrap gap-2 mb-4 justify-center md:justify-start">
-                  {SUGGESTED_QUESTIONS.map((q, i) => (
-                    <button 
-                      key={i} 
-                      onClick={() => handleSendMessage(null, q)}
-                      className="text-xs font-medium bg-[var(--bg-subtle)] border border-[var(--border-light)] text-[var(--text-muted)] hover:text-[#3B82F6] hover:border-[#3B82F6]/50 px-3 py-1.5 rounded-full transition-all hover:shadow-sm"
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
-
-                <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto relative group">
-                  <div className="absolute -inset-0.5 bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] rounded-2xl blur opacity-0 group-focus-within:opacity-30 transition duration-500"></div>
-                  <input 
-                    type="text" 
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Ask a question about your document..."
-                    className="relative w-full pl-6 pr-16 py-4 rounded-2xl border border-[var(--border-light)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none focus:ring-0 transition-all shadow-inner placeholder-[var(--text-muted)]"
-                  />
-                  <button 
-                    type="submit" 
-                    disabled={!chatInput.trim()}
-                    className="absolute right-2 top-2 bottom-2 w-12 bg-[#3B82F6] hover:bg-[#2563EB] disabled:bg-[var(--border-light)] disabled:text-[var(--text-muted)] text-white rounded-xl flex items-center justify-center transition-all shadow-md hover:shadow-lg disabled:shadow-none hover:scale-105 active:scale-95"
-                  >
-                    <svg className="w-5 h-5 translate-x-px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
-                  </button>
-                </form>
-                <div className="text-center mt-4 text-xs font-medium text-[var(--text-muted)] opacity-70">
-                  AI can make mistakes. Consider verifying critical legal or financial information.
-                </div>
-              </div>
-            </div>
-
+            <ChatInterface
+              messages={messages}
+              chatInput={chatInput}
+              setChatInput={setChatInput}
+              isChatLoading={isChatLoading}
+              handleSendMessage={handleSendMessage}
+              chatEndRef={chatEndRef}
+              suggestedQuestions={SUGGESTED_QUESTIONS}
+            />
           </div>
-        )}
+        ) : null}
       </main>
     </div>
   );

@@ -1,9 +1,8 @@
-import React from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 
 const Logo = () => {
-  const { theme } = useTheme();
   return (
     <div className="flex items-center gap-2">
       <svg viewBox="0 0 40 40" className="h-8 w-auto" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -24,6 +23,8 @@ const Logo = () => {
 
 export const Landing = () => {
   const { theme, toggleTheme } = useTheme();
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(false);
 
   return (
     <div className="bg-premium-dark min-h-screen font-sans text-[var(--text-main)] overflow-hidden">
@@ -324,13 +325,81 @@ export const Landing = () => {
               <span className="text-sm text-[var(--text-muted)] border-l border-[var(--border-light)] pl-4">© 2026 Clario Inc.</span>
             </div>
             <div className="flex items-center gap-8 text-sm text-[var(--text-muted)]">
-              <a href="#" className="hover:text-[var(--text-main)] transition-colors">Privacy Policy</a>
-              <a href="#" className="hover:text-[var(--text-main)] transition-colors">Terms of Service</a>
-              <a href="#" className="hover:text-[var(--text-main)] transition-colors">Contact</a>
+              <button onClick={() => setPrivacyOpen(true)} className="hover:text-[var(--text-main)] transition-colors cursor-pointer">Privacy Policy</button>
+              <button onClick={() => setTermsOpen(true)} className="hover:text-[var(--text-main)] transition-colors cursor-pointer">Terms of Service</button>
+              <a href="mailto:raushankumar.rashu@gmail.com" className="hover:text-[var(--text-main)] transition-colors">Contact: raushankumar.rashu@gmail.com</a>
             </div>
           </div>
         </footer>
       </div>
+
+      {/* Privacy Policy Modal */}
+      {privacyOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in">
+          <div className="glass-card-premium max-w-2xl w-full p-8 rounded-3xl border border-[var(--border-light)] text-left relative max-h-[90vh] overflow-y-auto">
+            <button 
+              onClick={() => setPrivacyOpen(false)} 
+              className="absolute top-4 right-4 text-[var(--text-muted)] hover:text-red-500 p-2 rounded-full hover:bg-red-500/10 transition-colors"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <h2 className="text-2xl font-extrabold text-[var(--text-main)] mb-6">Privacy Policy</h2>
+            <div className="space-y-4 text-sm text-[var(--text-muted)] leading-relaxed">
+              <p>
+                At Clario, your privacy is our core engineering design. We ensure a <strong>100% private, serverless, and local-first</strong> model.
+              </p>
+              <h3 className="font-bold text-[var(--text-main)] text-base mt-4">1. Local Processing</h3>
+              <p>
+                All text extractions, sliding-window chunking, and AI embedding generations are performed directly in your browser via WebAssembly (WASM). Your raw document content never leaves your device.
+              </p>
+              <h3 className="font-bold text-[var(--text-main)] text-base mt-4">2. IndexedDB Local Storage</h3>
+              <p>
+                Your past document analysis metrics and conversation histories are stored entirely client-side on your local hard drive using browser IndexedDB.
+              </p>
+              <h3 className="font-bold text-[var(--text-main)] text-base mt-4">3. Cloud API Proxying</h3>
+              <p>
+                When using RAG query responses, only the specific semantic text chunks required to answer your query are securely relayed as contexts to the Gemini models. No files are retained on our servers.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Terms of Service Modal */}
+      {termsOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in">
+          <div className="glass-card-premium max-w-2xl w-full p-8 rounded-3xl border border-[var(--border-light)] text-left relative max-h-[90vh] overflow-y-auto">
+            <button 
+              onClick={() => setTermsOpen(false)} 
+              className="absolute top-4 right-4 text-[var(--text-muted)] hover:text-red-500 p-2 rounded-full hover:bg-red-500/10 transition-colors"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <h2 className="text-2xl font-extrabold text-[var(--text-main)] mb-6">Terms of Service</h2>
+            <div className="space-y-4 text-sm text-[var(--text-muted)] leading-relaxed">
+              <p>
+                Please read these Terms of Service carefully before utilizing the Clario serverless document analysis service.
+              </p>
+              <h3 className="font-bold text-[var(--text-main)] text-base mt-4">1. Acceptance of Terms</h3>
+              <p>
+                By accessing Clario, you acknowledge that you are using a client-side document processing tool. All vector metrics are computed in your browser using local AI assets.
+              </p>
+              <h3 className="font-bold text-[var(--text-main)] text-base mt-4">2. Disclaimer of Liability</h3>
+              <p>
+                Clario's client-side assessments are powered by local TF-IDF models and Gemini LLM proxies. These summaries are designed for review aid purposes. Verify critical financial, lease, or legal information independently.
+              </p>
+              <h3 className="font-bold text-[var(--text-main)] text-base mt-4">3. Zero Storage Warranty</h3>
+              <p>
+                We do not save your files or chat transcripts on any external servers. Your local browserIndexedDB database stores your private records, and you may clear it at any time.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -60,10 +60,13 @@ export const Navbar = () => {
 
   const isActive = (path) => location.pathname === path;
 
-  React.useEffect(() => {
-    setMobileMenuOpen(false);
-    setDropdownOpen(false);
-  }, [location.pathname]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (mobileMenuOpen) setMobileMenuOpen(false);
+      if (dropdownOpen) setDropdownOpen(false);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [location.pathname, mobileMenuOpen, dropdownOpen]);
 
   const handleLogout = () => {
     logout();

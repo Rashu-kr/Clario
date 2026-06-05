@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -50,7 +50,7 @@ export const Login = () => {
       await new Promise(r => setTimeout(r, 1200)); // Simulate API
       await login(email, password, rememberMe);
       navigate(from, { replace: true });
-    } catch (err) {
+    } catch {
       setError('Invalid email or password. Please try again.');
       setIsSubmitting(false);
     }
